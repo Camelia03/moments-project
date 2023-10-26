@@ -1,96 +1,78 @@
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
+import axios from "axios";
 import { axiosReq, axiosRes } from "../api/axiosDefaults";
-import { useCurrentUser } from "../contexts/CurrentUserContext";
-import { followHelper, unfollowHelper } from "../utils/utils";
+import { useHistory } from "react-router";
 
-const ProfileDataContext = createContext();
-const SetProfileDataContext = createContext();
+export const CurrentUserContext = createContext();
+export const SetCurrentUserContext = createContext();
 
-export const useProfileData = () => useContext(ProfileDataContext);
-export const useSetProfileData = () => useContext(SetProfileDataContext);
+export const useCurrentUser = () => useContext(CurrentUserContext);
+export const useSetCurrentUser = () => useContext(SetCurrentUserContext);
 
-export const ProfileDataProvider = ({ children }) => {
-  const [profileData, setProfileData] = useState({
-    // we will use the pageProfile later!
-    pageProfile: { results: [] },
-    popularProfiles: { results: [] },
-  });
+export const CurrentUserProvider = ({ children }) => {
+  const [currentUser, setCurrentUser] = useState(null);
+  const history = useHistory();
 
-  const currentUser = useCurrentUser();
-
-  const handleFollow = async (clickedProfile) => {
+  const handleMount = async () => {
     try {
-      const { data } = await axiosRes.post("/followers/", {
-        followed: clickedProfile.id,
-      });
-
-      setProfileData((prevState) => ({
-        ...prevState,
-        pageProfile: {
-          results: prevState.pageProfile.results.map((profile) =>
-            followHelper(profile, clickedProfile, data.id)
-          ),
-        },
-        popularProfiles: {
-          ...prevState.popularProfiles,
-          results: prevState.popularProfiles.results.map((profile) =>
-            followHelper(profile, clickedProfile, data.id)
-          ),
-        },
-      }));
+      const { data } = await axiosRes.get("dj-rest-auth/user/");
+      setCurrentUser(data);
     } catch (err) {
-      // console.log(err);
-    }
-  };
-
-  const handleUnfollow = async (clickedProfile) => {
-    try {
-      await axiosRes.delete(`/followers/${clickedProfile.following_id}/`);
-
-      setProfileData((prevState) => ({
-        ...prevState,
-        pageProfile: {
-          results: prevState.pageProfile.results.map((profile) =>
-            unfollowHelper(profile, clickedProfile)
-          ),
-        },
-        popularProfiles: {
-          ...prevState.popularProfiles,
-          results: prevState.popularProfiles.results.map((profile) =>
-            unfollowHelper(profile, clickedProfile)
-          ),
-        },
-      }));
-    } catch (err) {
-      // console.log(err);
+      console.log(err);
     }
   };
 
   useEffect(() => {
-    const handleMount = async () => {
-      try {
-        const { data } = await axiosReq.get(
-          "/profiles/?ordering=-followers_count"
-        );
-        setProfileData((prevState) => ({
-          ...prevState,
-          popularProfiles: data,
-        }));
-      } catch (err) {
-        // console.log(err);
-      }
-    };
-
     handleMount();
-  }, [currentUser]);
+  }, []);
+
+  useMemo(() => {
+    axiosReq.interceptors.request.use(
+      async (config) => {
+        try {
+          await axios.post("/dj-rest-auth/token/refresh/");
+        } catch (err) {
+          setCurrentUser((prevCurrentUser) => {
+            if (prevCurrentUser) {
+              history.push("/signin");
+            }
+            return null;
+          });
+          return config;
+        }
+        return config;
+      },
+      (err) => {
+        return Promise.reject(err);
+      }
+    );
+
+    axiosRes.interceptors.response.use(
+      (response) => response,
+      async (err) => {
+        if (err.response?.status === 401) {
+          try {
+            await axios.post("/dj-rest-auth/token/refresh/");
+          } catch (err) {
+            setCurrentUser((prevCurrentUser) => {
+              if (prevCurrentUser) {
+                history.push("/signin");
+              }
+              return null;
+            });
+          }
+          return axios(err.config);
+        }
+        return Promise.reject(err);
+      }
+    );
+  }, [history]);
 
   return (
-    <ProfileDataContext.Provider value={profileData}>
-      <SetProfileDataContext.Provider
-        value={{ setProfileData, handleFollow, handleUnfollow }}
-      >
+    <CurrentUserContext.Provider value={currentUser}>
+      <SetCurrentUserContext.Provider value={setCurrentUser}>
         {children}
-      </SetProfileDataContext.Provider>
-    </ProfileDataContext.Provider>
+      </SetCurrentUserContext.Provider>
+    </CurrentUserContext.Provider>
   );
 };
